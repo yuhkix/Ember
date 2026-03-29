@@ -2,14 +2,30 @@
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
 #include <d3d11.h>
+#include <dwmapi.h>
+#include <windowsx.h>
 #include <tchar.h>
 
 #include "app.h"
 #include "theme.h"
 #include "anim.h"
 
+#pragma comment(lib, "dwmapi.lib")
+
 // Forward declaration for ImGui Win32 backend
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// Global HWND for title bar button access
+static HWND g_hwnd = nullptr;
+
+HWND get_main_hwnd() { return g_hwnd; }
+
+// Custom title bar height (pixels)
+static constexpr int TITLE_BAR_HEIGHT = 32;
+// Resize border width (pixels)
+static constexpr int RESIZE_BORDER    = 6;
+// Title bar button width (pixels)
+static constexpr int TITLE_BTN_WIDTH  = 46;
 
 // DX11 globals
 static ID3D11Device*            g_pd3dDevice           = nullptr;
@@ -46,14 +62,20 @@ int main() {
     int posX = (screenW - windowW) / 2;
     int posY = (screenH - windowH) / 2;
 
-    // Create window
+    // Create borderless window with resizable frame
     HWND hwnd = CreateWindowExW(
         0,
         wc.lpszClassName,
         L"Prophecy - Dragon's Prophet IDX Tool",
-        WS_OVERLAPPEDWINDOW,
+        WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU,
         posX, posY, windowW, windowH,
         nullptr, nullptr, wc.hInstance, nullptr);
+
+    g_hwnd = hwnd;
+
+    // Extend frame into client area for shadow effect
+    MARGINS margins = { 0, 0, 0, 1 };
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
 
     // Initialize DX11
     if (!CreateDeviceD3D(hwnd)) {
@@ -71,6 +93,23 @@ int main() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Load custom font (try in order of preference)
+    {
+        ImFont* font = nullptr;
+        const char* font_paths[] = {
+            "C:\\Windows\\Fonts\\CascadiaCode.ttf",
+            "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+        };
+        for (const char* path : font_paths) {
+            if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
+                font = io.Fonts->AddFontFromFileTTF(path, 16.0f);
+                if (font) break;
+            }
+        }
+        // If no font loaded, ImGui uses its built-in default
+    }
 
     // Apply custom theme
     theme::apply_dark_red();
@@ -238,6 +277,60 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return true;
 
     switch (msg) {
+    case WM_NCCALCSIZE:
+        // Remove the non-client area (title bar) entirely.
+        // When wParam is TRUE, returning 0 means "use entire window as client area".
+        if (wParam == TRUE) {
+            // When maximized, adjust for the invisible resize border so the
+            // window doesn't extend beyond the monitor work area.
+            if (IsZoomed(hWnd)) {
+                NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                // Get the monitor info for the monitor the window is on
+                HMONITOR mon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi = {};
+                mi.cbSize = sizeof(mi);
+                GetMonitorInfo(mon, &mi);
+                params->rgrc[0] = mi.rcWork;
+            }
+            return 0;
+        }
+        break;
+
+    case WM_NCHITTEST: {
+        // Custom hit-testing for borderless window: resize edges + caption drag
+        POINT cursor = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT rc;
+        GetWindowRect(hWnd, &rc);
+
+        int x = cursor.x - rc.left;
+        int y = cursor.y - rc.top;
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        // Resize borders (only when not maximized)
+        if (!IsZoomed(hWnd)) {
+            if (y < RESIZE_BORDER && x < RESIZE_BORDER) return HTTOPLEFT;
+            if (y < RESIZE_BORDER && x > w - RESIZE_BORDER) return HTTOPRIGHT;
+            if (y > h - RESIZE_BORDER && x < RESIZE_BORDER) return HTBOTTOMLEFT;
+            if (y > h - RESIZE_BORDER && x > w - RESIZE_BORDER) return HTBOTTOMRIGHT;
+            if (y < RESIZE_BORDER) return HTTOP;
+            if (y > h - RESIZE_BORDER) return HTBOTTOM;
+            if (x < RESIZE_BORDER) return HTLEFT;
+            if (x > w - RESIZE_BORDER) return HTRIGHT;
+        }
+
+        // Title bar area: top TITLE_BAR_HEIGHT pixels
+        if (y < TITLE_BAR_HEIGHT) {
+            // Right side: 3 buttons (minimize, maximize, close), each TITLE_BTN_WIDTH wide
+            int buttons_start = w - (TITLE_BTN_WIDTH * 3);
+            if (x >= buttons_start)
+                return HTCLIENT; // let ImGui handle button clicks
+            return HTCAPTION; // draggable title area
+        }
+
+        return HTCLIENT;
+    }
+
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED)
             return 0;

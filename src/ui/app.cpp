@@ -3,6 +3,7 @@
 #include "anim.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <nfd.h>
 
 #include <cstdio>
@@ -63,6 +64,152 @@ void App::set_status(const std::string& msg) {
 }
 
 // ---------------------------------------------------------------------------
+// Custom title bar
+// ---------------------------------------------------------------------------
+
+static constexpr float TITLE_BAR_H   = 32.0f;
+static constexpr float TITLE_BTN_W   = 46.0f;
+
+static void render_title_bar() {
+    HWND hwnd = get_main_hwnd();
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImVec2 pos = vp->Pos;
+    ImVec2 size = ImVec2(vp->Size.x, TITLE_BAR_H);
+
+    // Set up a frameless window for the title bar
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.07f, 1.0f));
+
+    ImGuiWindowFlags tb_flags = ImGuiWindowFlags_NoTitleBar |
+                                ImGuiWindowFlags_NoResize   |
+                                ImGuiWindowFlags_NoMove     |
+                                ImGuiWindowFlags_NoScrollbar |
+                                ImGuiWindowFlags_NoScrollWithMouse |
+                                ImGuiWindowFlags_NoCollapse |
+                                ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                ImGuiWindowFlags_NoNavFocus |
+                                ImGuiWindowFlags_NoFocusOnAppearing;
+
+    ImGui::Begin("##TitleBar", nullptr, tb_flags);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Draw bottom border line
+    dl->AddLine(
+        ImVec2(pos.x, pos.y + TITLE_BAR_H - 1),
+        ImVec2(pos.x + size.x, pos.y + TITLE_BAR_H - 1),
+        IM_COL32(0x2A, 0x2A, 0x2A, 0xFF));
+
+    // -- Left side: title text --
+    float text_y = pos.y + (TITLE_BAR_H - ImGui::GetFontSize()) * 0.5f;
+
+    // "PROPHECY" in red
+    const char* title_red = "PROPHECY";
+    dl->AddText(ImVec2(pos.x + 12.0f, text_y),
+                IM_COL32(0xFF, 0x22, 0x22, 0xFF), title_red);
+    float red_w = ImGui::CalcTextSize(title_red).x;
+
+    // Subtitle in grey
+    const char* title_grey = "  Dragon's Prophet IDX Tool";
+    dl->AddText(ImVec2(pos.x + 12.0f + red_w, text_y),
+                IM_COL32(0x80, 0x80, 0x80, 0xFF), title_grey);
+
+    // -- Right side: window control buttons --
+    float btn_y = pos.y;
+    float btn_x_start = pos.x + size.x - (TITLE_BTN_W * 3.0f);
+
+    // Helper: draw a title bar button, returns true if clicked
+    struct BtnResult { bool clicked; bool hovered; };
+    auto draw_button = [&](int index, bool is_close) -> BtnResult {
+        float bx = btn_x_start + TITLE_BTN_W * index;
+        ImVec2 bmin(bx, btn_y);
+        ImVec2 bmax(bx + TITLE_BTN_W, btn_y + TITLE_BAR_H);
+
+        // Use invisible button for click detection
+        ImGui::SetCursorScreenPos(bmin);
+        char id[32];
+        snprintf(id, sizeof(id), "##tb_%d", index);
+        ImGui::InvisibleButton(id, ImVec2(TITLE_BTN_W, TITLE_BAR_H));
+
+        bool hovered = ImGui::IsItemHovered();
+        bool active  = ImGui::IsItemActive();
+        bool clicked = ImGui::IsItemClicked(0);
+
+        // Hover/active backgrounds
+        if (active) {
+            ImU32 bg = is_close ? IM_COL32(0xCC, 0x11, 0x11, 0xFF)
+                                : IM_COL32(0x50, 0x50, 0x50, 0xFF);
+            dl->AddRectFilled(bmin, bmax, bg);
+        } else if (hovered) {
+            ImU32 bg = is_close ? IM_COL32(0xE8, 0x1A, 0x1A, 0xFF)
+                                : IM_COL32(0x3A, 0x3A, 0x3A, 0xFF);
+            dl->AddRectFilled(bmin, bmax, bg);
+        }
+
+        return { clicked, hovered };
+    };
+
+    // Button 0: Minimize (horizontal line)
+    {
+        auto r = draw_button(0, false);
+        float cx = btn_x_start + TITLE_BTN_W * 0.5f;
+        float cy = btn_y + TITLE_BAR_H * 0.5f;
+        ImU32 col = r.hovered ? IM_COL32(0xFF, 0xFF, 0xFF, 0xFF)
+                              : IM_COL32(0xCC, 0xCC, 0xCC, 0xFF);
+        dl->AddLine(ImVec2(cx - 6.0f, cy), ImVec2(cx + 6.0f, cy), col, 1.2f);
+        if (r.clicked) ShowWindow(hwnd, SW_MINIMIZE);
+    }
+
+    // Button 1: Maximize/Restore (rectangle or overlapping rectangles)
+    {
+        auto r = draw_button(1, false);
+        float cx = btn_x_start + TITLE_BTN_W * 1.0f + TITLE_BTN_W * 0.5f;
+        float cy = btn_y + TITLE_BAR_H * 0.5f;
+        ImU32 col = r.hovered ? IM_COL32(0xFF, 0xFF, 0xFF, 0xFF)
+                              : IM_COL32(0xCC, 0xCC, 0xCC, 0xFF);
+        bool maximized = IsZoomed(hwnd);
+        if (maximized) {
+            // Two overlapping rectangles (restore icon)
+            float s = 4.5f;
+            float off = 2.0f;
+            dl->AddRect(ImVec2(cx - s + off, cy - s),
+                        ImVec2(cx + s, cy + s - off), col, 0.0f, 0, 1.2f);
+            dl->AddRect(ImVec2(cx - s, cy - s + off),
+                        ImVec2(cx + s - off, cy + s), col, 0.0f, 0, 1.2f);
+        } else {
+            // Single rectangle (maximize icon)
+            float s = 5.0f;
+            dl->AddRect(ImVec2(cx - s, cy - s),
+                        ImVec2(cx + s, cy + s), col, 0.0f, 0, 1.2f);
+        }
+        if (r.clicked) {
+            ShowWindow(hwnd, maximized ? SW_RESTORE : SW_MAXIMIZE);
+        }
+    }
+
+    // Button 2: Close (X)
+    {
+        auto r = draw_button(2, true);
+        float cx = btn_x_start + TITLE_BTN_W * 2.0f + TITLE_BTN_W * 0.5f;
+        float cy = btn_y + TITLE_BAR_H * 0.5f;
+        ImU32 col = r.hovered ? IM_COL32(0xFF, 0xFF, 0xFF, 0xFF)
+                              : IM_COL32(0xCC, 0xCC, 0xCC, 0xFF);
+        float s = 5.0f;
+        dl->AddLine(ImVec2(cx - s, cy - s), ImVec2(cx + s, cy + s), col, 1.2f);
+        dl->AddLine(ImVec2(cx + s, cy - s), ImVec2(cx - s, cy + s), col, 1.2f);
+        if (r.clicked) PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+}
+
+// ---------------------------------------------------------------------------
 // render()
 // ---------------------------------------------------------------------------
 
@@ -76,9 +223,13 @@ void App::render() {
         }
     }
 
+    // Render custom title bar first
+    render_title_bar();
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
+    // Position main content below the title bar
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + TITLE_BAR_H));
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - TITLE_BAR_H));
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
                              ImGuiWindowFlags_NoResize   |
@@ -88,14 +239,7 @@ void App::render() {
 
     ImGui::Begin("##Main", nullptr, flags);
 
-    // Title
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.13f, 0.13f, 1.0f));
-    ImGui::Text("PROPHECY");
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-    ImGui::Text("Dragon's Prophet IDX Tool");
-    ImGui::PopStyleColor();
+    // (Title is now in the custom title bar, no need for in-content title)
 
     ImGui::Separator();
 

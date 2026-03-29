@@ -50,7 +50,7 @@ target("Prophecy")
     add_includedirs("vendor/nfd/src/include")
 
     -- System libraries
-    add_syslinks("d3d11", "d3dcompiler", "dxgi", "ole32", "shell32", "user32", "gdi32")
+    add_syslinks("d3d11", "d3dcompiler", "dxgi", "dwmapi", "ole32", "shell32", "user32", "gdi32")
 
     -- No console window
     if is_plat("windows") then

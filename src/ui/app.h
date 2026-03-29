@@ -7,6 +7,14 @@
 #include <atomic>
 #include <mutex>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+// Defined in main.cpp -- returns the main application HWND
+HWND get_main_hwnd();
+
 class App {
 public:
     App();
