@@ -91,7 +91,7 @@ src/
 
 ## Format Documentation
 
-The IDX/P00x archive format was fully reverse-engineered from the original binaries using IDA Pro. See [`IDX_FORMAT_SPEC.md`](../IDX_FORMAT_SPEC.md) for the complete specification.
+The IDX/P00x archive format was fully reverse-engineered from the original binaries using IDA Pro. See [`IDX_FORMAT_SPEC.md`](./IDX_FORMAT_SPEC.md) for the complete specification.
 
 ## License
 
