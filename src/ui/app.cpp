@@ -1,6 +1,7 @@
 #include "app.h"
 #include "theme.h"
 #include "anim.h"
+#include "widgets.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -379,54 +380,16 @@ void App::render_unpack_tab() {
 
     // --- Extracted files list (populated live during extraction) ---
     {
-        std::lock_guard<std::mutex> lock(m_extracted_mutex);
-        int count = static_cast<int>(m_extracted_files.size());
-        if (count > 0) {
-            // Table without ScrollY: rows are rendered inline, no internal scroll region.
-            // The outer ImGui window handles scrolling if content exceeds viewport.
-            ImGuiTableFlags tflags = ImGuiTableFlags_Borders   |
-                                     ImGuiTableFlags_RowBg     |
-                                     ImGuiTableFlags_Resizable;
-
-            if (ImGui::BeginTable("##FileList", 4, tflags)) {
-                ImGui::TableSetupColumn("Name",   ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableHeadersRow();
-
-                for (int row = 0; row < count; ++row) {
-                    const auto& ef = m_extracted_files[row];
-                    int anim_idx = row - m_extracted_stagger_base;
-                    float row_alpha = anim::row_fade(anim_idx >= 0 ? anim_idx : 0);
-                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
-
-                    ImGui::TableNextRow();
-
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(ef.name.c_str());
-
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(ef.size_str.c_str());
-
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(ef.type_str.c_str());
-
-                    ImGui::TableSetColumnIndex(3);
-                    if (ef.success)
-                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
-                    else
-                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERR");
-
-                    ImGui::PopStyleVar();
-                }
-
-                ImGui::EndTable();
+        std::vector<widgets::FileListItem> items;
+        {
+            std::lock_guard<std::mutex> lock(m_extracted_mutex);
+            items.reserve(m_extracted_files.size());
+            for (const auto& ef : m_extracted_files) {
+                items.push_back({ef.name, ef.size_str, ef.type_str, ef.success});
             }
-
-            // Auto-scroll outer window to bottom during extraction
-            if (m_working)
-                ImGui::SetScrollHereY(1.0f);
+        }
+        if (!items.empty()) {
+            widgets::FileList("##unpack_list", items, m_unpack_list_state, 0.0f, m_working);
         }
     }
 }
@@ -550,30 +513,9 @@ void App::render_pack_tab() {
 
     ImGui::Spacing();
 
-    // --- File preview table ---
+    // --- File preview list ---
     if (!m_pack_files_preview.empty()) {
-        // Calculate table height to fit content without empty rows
-        ImGuiTableFlags tflags = ImGuiTableFlags_Borders |
-                                 ImGuiTableFlags_RowBg;
-
-        if (ImGui::BeginTable("##PackPreview", 1, tflags)) {
-            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            int pack_count = static_cast<int>(m_pack_files_preview.size());
-            for (int row = 0; row < pack_count; ++row) {
-                float row_alpha = anim::row_fade(row);
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(m_pack_files_preview[row].c_str());
-
-                ImGui::PopStyleVar();
-            }
-
-            ImGui::EndTable();
-        }
+        widgets::SimpleList("##pack_list", m_pack_files_preview, m_pack_list_state);
     }
 }
 
@@ -609,6 +551,7 @@ void App::start_unpack() {
         m_extracted_files.clear();
         m_extracted_stagger_base = 0;
     }
+    m_unpack_list_state = {};
     anim::reset_stagger();
 
     std::string out_dir = m_unpack_output_dir;

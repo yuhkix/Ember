@@ -1,6 +1,7 @@
 #pragma once
 #include "idx_reader.h"
 #include "idx_writer.h"
+#include "widgets.h"
 #include <string>
 #include <vector>
 #include <thread>
@@ -40,6 +41,10 @@ private:
     std::mutex                  m_extracted_mutex;
     std::vector<ExtractedFile>  m_extracted_files;
     int                         m_extracted_stagger_base = 0; // for animation offset
+
+    // Widget states for custom lists
+    widgets::FileListState m_unpack_list_state;
+    widgets::FileListState m_pack_list_state;
 
     // Pack state
     std::string    m_pack_source_dir;
