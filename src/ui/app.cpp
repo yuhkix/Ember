@@ -263,6 +263,14 @@ void App::render() {
             ImGui::PopStyleVar();
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Index")) {
+            m_active_tab = 2;
+            float alpha = anim::tab_fade(2);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
+            render_index_tab();
+            ImGui::PopStyleVar();
+            ImGui::EndTabItem();
+        }
         ImGui::EndTabBar();
     }
 
@@ -518,6 +526,133 @@ void App::render_pack_tab() {
     // --- File preview list ---
     if (!m_pack_files_preview.empty()) {
         widgets::SimpleList("##pack_list", m_pack_files_preview, m_pack_list_state);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// render_index_tab()
+// ---------------------------------------------------------------------------
+
+void App::render_index_tab() {
+    // ---- .hidx section ----
+    ImGui::SeparatorText(".hidx  (Hash Index)");
+
+    ImGui::Text("HIDX File:");
+    ImGui::SameLine();
+    {
+        char buf[512];
+        std::memset(buf, 0, sizeof(buf));
+        std::strncpy(buf, m_hidx_path.c_str(), sizeof(buf) - 1);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80.0f);
+        ImGui::InputText("##hidx_path", buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hidx")) {
+        nfdu8char_t* outPath = nullptr;
+        nfdu8filteritem_t filter = { "HIDX files", "hidx" };
+        nfdopendialogu8args_t args = {};
+        args.filterList  = &filter;
+        args.filterCount = 1;
+        if (NFD_OpenDialogU8_With(&outPath, &args) == NFD_OKAY) {
+            m_hidx_path = outPath;
+            NFD_FreePathU8(outPath);
+
+            if (m_hidx_reader.open(m_hidx_path)) {
+                m_hidx_loaded = true;
+                m_hidx_list_state = {};
+                anim::reset_stagger();
+                set_status("Loaded HIDX: " + std::to_string(m_hidx_reader.entry_count()) + " entries");
+            } else {
+                m_hidx_loaded = false;
+                set_status("Error: " + m_hidx_reader.error());
+            }
+        }
+    }
+
+    if (m_hidx_loaded) {
+        ImGui::Text("Entries: %u", m_hidx_reader.entry_count());
+        ImGui::Spacing();
+
+        // Build display items from HIDX entries
+        std::vector<widgets::FileListItem> items;
+        items.reserve(m_hidx_reader.entries().size());
+        for (const auto& e : m_hidx_reader.entries()) {
+            char hash_str[16], offset_str[16], size_str[16], flags_str[16];
+            std::snprintf(hash_str,   sizeof(hash_str),   "%08X", e.hash);
+            std::snprintf(flags_str,  sizeof(flags_str),  "%u",   e.flags);
+            std::snprintf(offset_str, sizeof(offset_str), "%08X", e.offset);
+            std::snprintf(size_str,   sizeof(size_str),   "%u",   e.size);
+
+            // name = "hash  offset", size = size, type = flags
+            std::string label = std::string(hash_str) + "  @" + offset_str;
+            items.push_back({ label, size_str, std::string("flags=") + flags_str, true });
+        }
+
+        float half_h = (ImGui::GetContentRegionAvail().y - 60.0f) * 0.5f;
+        if (half_h < 100.0f) half_h = 100.0f;
+        widgets::FileList("##hidx_list", items, m_hidx_list_state, half_h, false);
+    }
+
+    ImGui::Spacing();
+
+    // ---- .fsidx section ----
+    ImGui::SeparatorText(".fsidx  (Filesystem Index)");
+
+    ImGui::Text("FSIDX File:");
+    ImGui::SameLine();
+    {
+        char buf[512];
+        std::memset(buf, 0, sizeof(buf));
+        std::strncpy(buf, m_fsidx_path.c_str(), sizeof(buf) - 1);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80.0f);
+        ImGui::InputText("##fsidx_path", buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##fsidx")) {
+        nfdu8char_t* outPath = nullptr;
+        nfdu8filteritem_t filter = { "FSIDX files", "fsidx" };
+        nfdopendialogu8args_t args = {};
+        args.filterList  = &filter;
+        args.filterCount = 1;
+        if (NFD_OpenDialogU8_With(&outPath, &args) == NFD_OKAY) {
+            m_fsidx_path = outPath;
+            NFD_FreePathU8(outPath);
+
+            if (m_fsidx_reader.open(m_fsidx_path)) {
+                m_fsidx_loaded = true;
+                m_fsidx_list_state = {};
+                anim::reset_stagger();
+                set_status("Loaded FSIDX: " + std::to_string(m_fsidx_reader.entry_count()) +
+                           " entries  (v" + m_fsidx_reader.version_string() + ")");
+            } else {
+                m_fsidx_loaded = false;
+                set_status("Error: " + m_fsidx_reader.error());
+            }
+        }
+    }
+
+    if (m_fsidx_loaded) {
+        ImGui::Text("Version: %s", m_fsidx_reader.version_string().c_str());
+        ImGui::SameLine();
+        ImGui::Text("   Entries: %u", m_fsidx_reader.entry_count());
+        ImGui::SameLine();
+        ImGui::Text("   Field1: %u", m_fsidx_reader.header().field1);
+        ImGui::Spacing();
+
+        // Build display items — show all 6 uint32 fields as hex
+        std::vector<widgets::FileListItem> items;
+        items.reserve(m_fsidx_reader.entries().size());
+        for (const auto& e : m_fsidx_reader.entries()) {
+            char col0[48], col1[24], col2[24];
+            std::snprintf(col0, sizeof(col0), "%08X %08X %08X",
+                          e.fields[0], e.fields[1], e.fields[2]);
+            std::snprintf(col1, sizeof(col1), "%08X %08X",
+                          e.fields[3], e.fields[4]);
+            std::snprintf(col2, sizeof(col2), "%08X", e.fields[5]);
+            items.push_back({ col0, col1, col2, true });
+        }
+
+        widgets::FileList("##fsidx_list", items, m_fsidx_list_state, 0.0f, false);
     }
 }
 

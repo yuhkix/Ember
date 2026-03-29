@@ -1,6 +1,8 @@
 #pragma once
 #include "idx_reader.h"
 #include "idx_writer.h"
+#include "hidx_reader.h"
+#include "fsidx_reader.h"
 #include "widgets.h"
 #include <string>
 #include <vector>
@@ -23,7 +25,7 @@ public:
     void render();
 
 private:
-    int m_active_tab = 0; // 0=Unpack, 1=Pack
+    int m_active_tab = 0; // 0=Unpack, 1=Pack, 2=Index
 
     // Unpack state
     std::string m_idx_path;
@@ -45,6 +47,8 @@ private:
     // Widget states for custom lists
     widgets::FileListState m_unpack_list_state;
     widgets::FileListState m_pack_list_state;
+    widgets::FileListState m_hidx_list_state;
+    widgets::FileListState m_fsidx_list_state;
 
     // Pack state
     std::string    m_pack_source_dir;
@@ -63,8 +67,17 @@ private:
     std::string m_pending_status;
     bool        m_has_pending_status = false;
 
+    // Index viewer state
+    HidxReader   m_hidx_reader;
+    FsidxReader  m_fsidx_reader;
+    bool         m_hidx_loaded = false;
+    bool         m_fsidx_loaded = false;
+    std::string  m_hidx_path;
+    std::string  m_fsidx_path;
+
     void render_unpack_tab();
     void render_pack_tab();
+    void render_index_tab();
     void render_status_bar();
     void start_unpack();
     void start_pack();
