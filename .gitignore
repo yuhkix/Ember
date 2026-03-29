@@ -1,0 +1,29 @@
+# Build output
+build/
+.xmake/
+
+# IDE
+.vs/
+.vscode/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+
+# Vendored dependencies (cloned separately)
+vendor/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Binaries
+*.exe
+*.dll
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
