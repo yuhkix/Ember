@@ -3,6 +3,7 @@ build/
 .xmake/
 
 # IDE
+docs/
 .vs/
 .vscode/
 *.vcxproj*
@@ -10,8 +11,10 @@ build/
 *.suo
 *.user
 
-# Vendored dependencies (cloned separately)
-vendor/
+# Vendored dependencies (cloned via setup.bat)
+vendor/imgui/
+vendor/lzma/
+vendor/nfd/
 
 # OS
 Thumbs.db
