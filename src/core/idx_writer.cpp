@@ -222,6 +222,7 @@ bool IdxWriter::pack(const std::string& source_dir,
 
         // Record entry
         EntryRecord rec{};
+        rec.fixed.field_0         = 2; // entry version (matches game format)
         rec.fixed.data_offset     = current_offset;
         rec.fixed.data_file_index = current_data_index;
         rec.filename              = rel;
@@ -251,7 +252,7 @@ bool IdxWriter::pack(const std::string& source_dir,
     // New format header: magic(4) + version(16) + count(4) = 24 bytes
     IdxHeaderNew hdr{};
     hdr.magic = IDX_MAGIC_NEW;
-    std::strncpy(hdr.version, "1.0.0.ember", sizeof(hdr.version));
+    std::strncpy(hdr.version, "3.0.1625.eu", sizeof(hdr.version));
     hdr.file_count = static_cast<uint32_t>(records.size());
     if (std::fwrite(&hdr, sizeof(IdxHeaderNew), 1, idx) != 1) {
         m_error = "Failed to write IDX header";
