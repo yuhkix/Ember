@@ -4,6 +4,7 @@ build/
 
 # IDE
 docs/
+.claude/
 .vs/
 .vscode/
 *.vcxproj*
