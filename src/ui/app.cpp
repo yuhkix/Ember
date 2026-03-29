@@ -388,11 +388,11 @@ void App::render_unpack_tab() {
 
         if (ImGui::BeginTable("##FileList", 5, tflags, ImVec2(0, table_h))) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_None, 300.0f);
-            ImGui::TableSetupColumn("Offset",     ImGuiTableColumnFlags_None, 100.0f);
-            ImGui::TableSetupColumn("Size",       ImGuiTableColumnFlags_None, 100.0f);
-            ImGui::TableSetupColumn("Compressed", ImGuiTableColumnFlags_None, 100.0f);
-            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_None, 60.0f);
+            ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthFixed, 300.0f);
+            ImGui::TableSetupColumn("Offset",     ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Size",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Compressed", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_WidthFixed, 60.0f);
             ImGui::TableHeadersRow();
 
             ImGuiListClipper clipper;

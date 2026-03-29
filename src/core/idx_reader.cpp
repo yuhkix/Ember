@@ -98,6 +98,21 @@ bool IdxReader::open(const std::string& idx_path) {
             while (std::fread(&ch, 1, 1, f) == 1) {
                 if (ch == '\0') break;
                 entry.filename += ch;
+                // Safety: filenames shouldn't be longer than 260 chars
+                if (entry.filename.size() > 260) {
+                    m_error = "Entry #" + std::to_string(i) + ": filename too long (likely parsing error at offset " +
+                              std::to_string(ftell(f)) + ")";
+                    std::fclose(f);
+                    return false;
+                }
+            }
+            // Validate: filename should contain only printable ASCII
+            for (char c : entry.filename) {
+                if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E) {
+                    m_error = "Entry #" + std::to_string(i) + ": filename contains non-printable chars (likely format mismatch)";
+                    std::fclose(f);
+                    return false;
+                }
             }
         }
 
