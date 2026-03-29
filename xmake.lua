@@ -13,7 +13,8 @@ target("Prophecy")
     set_kind("binary")
     set_targetdir("$(builddir)/bin")
 
-    add_files("src/*.cpp")
+    add_files("src/*.cpp", "src/core/*.cpp", "src/ui/*.cpp")
+    add_includedirs("src", "src/core", "src/ui")
 
     -- ImGui core
     add_files(
