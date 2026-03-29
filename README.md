@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">PROPHECY</h1>
+  <h1 align="center">EMBER</h1>
   <p align="center">
     A modern IDX / P00x archive tool for Dragon's Prophet
     <br />
@@ -11,7 +11,7 @@
 
 ## About
 
-**Prophecy** is a modern reimplementation of the Dragon's Prophet IDX archive unpacker/packer, built from scratch in C++ with a custom dark-themed UI. It replaces the legacy 2013 Delphi tool with a fast, clean, and fully open-source alternative.
+**Ember** is a modern reimplementation of the Dragon's Prophet IDX archive unpacker/packer, built from scratch in C++ with a custom dark-themed UI. It replaces the legacy 2013 Delphi tool with a fast, clean, and fully open-source alternative.
 
 ### Features
 
@@ -51,8 +51,8 @@
 ### Setup
 
 ```bash
-git clone https://github.com/yuhkix/Prophecy.git
-cd Prophecy
+git clone https://github.com/yuhkix/Ember.git
+cd Ember
 setup.bat
 xmake f -p windows
 xmake build

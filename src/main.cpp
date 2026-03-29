@@ -51,7 +51,7 @@ int main() {
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = GetModuleHandle(nullptr);
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.lpszClassName = L"ProphecyWindowClass";
+    wc.lpszClassName = L"EmberWindowClass";
     RegisterClassExW(&wc);
 
     // Calculate centered window position
@@ -66,7 +66,7 @@ int main() {
     HWND hwnd = CreateWindowExW(
         0,
         wc.lpszClassName,
-        L"Prophecy - Dragon's Prophet IDX Tool",
+        L"Ember - Dragon's Prophet IDX Tool",
         WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU,
         posX, posY, windowW, windowH,
         nullptr, nullptr, wc.hInstance, nullptr);

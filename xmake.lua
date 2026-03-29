@@ -1,4 +1,4 @@
-set_project("Prophecy")
+set_project("Ember")
 set_version("1.0.0")
 set_languages("c++26", "c23") -- C++26
 
@@ -9,7 +9,7 @@ if is_plat("windows") then
     add_defines("_CRT_SECURE_NO_WARNINGS", "UNICODE", "_UNICODE")
 end
 
-target("Prophecy")
+target("Ember")
     set_kind("binary")
     set_targetdir("$(builddir)/bin")
 

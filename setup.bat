@@ -1,5 +1,5 @@
 @echo off
-echo === Prophecy - Dependency Setup ===
+echo === Ember - Dependency Setup ===
 echo.
 
 if not exist vendor mkdir vendor

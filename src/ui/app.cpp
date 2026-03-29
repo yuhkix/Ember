@@ -108,8 +108,8 @@ static void render_title_bar() {
     // -- Left side: title text --
     float text_y = pos.y + (TITLE_BAR_H - ImGui::GetFontSize()) * 0.5f;
 
-    // "PROPHECY" in red
-    const char* title_red = "PROPHECY";
+    // "EMBER" in red
+    const char* title_red = "EMBER";
     dl->AddText(ImVec2(pos.x + 12.0f, text_y),
                 IM_COL32(0xFF, 0x22, 0x22, 0xFF), title_red);
     float red_w = ImGui::CalcTextSize(title_red).x;
