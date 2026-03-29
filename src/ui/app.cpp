@@ -378,8 +378,14 @@ void App::render_unpack_tab() {
     // --- File list table ---
     if (m_idx_loaded) {
         const auto& entries = m_reader.entries();
-        float table_h = ImGui::GetContentRegionAvail().y - 8.0f;
-        if (table_h < 100.0f) table_h = 100.0f;
+
+        // Calculate table height to fit content without empty rows
+        float row_height = ImGui::GetTextLineHeightWithSpacing();
+        float header_height = row_height + 4.0f;
+        float content_height = header_height + static_cast<float>(entries.size()) * row_height;
+        float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
+        float table_h = (content_height < avail_height) ? content_height : avail_height;
+        if (table_h < header_height + row_height) table_h = header_height + row_height;
 
         ImGuiTableFlags tflags = ImGuiTableFlags_Borders    |
                                  ImGuiTableFlags_RowBg      |
@@ -388,11 +394,11 @@ void App::render_unpack_tab() {
 
         if (ImGui::BeginTable("##FileList", 5, tflags, ImVec2(0, table_h))) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthFixed, 300.0f);
-            ImGui::TableSetupColumn("Offset",     ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Size",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Compressed", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Offset",     ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Size",       ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Compressed", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableHeadersRow();
 
             ImGuiListClipper clipper;
@@ -557,8 +563,13 @@ void App::render_pack_tab() {
 
     // --- File preview table ---
     if (!m_pack_files_preview.empty()) {
-        float table_h = ImGui::GetContentRegionAvail().y - 8.0f;
-        if (table_h < 100.0f) table_h = 100.0f;
+        // Calculate table height to fit content without empty rows
+        float row_height = ImGui::GetTextLineHeightWithSpacing();
+        float header_height = row_height + 4.0f;
+        float content_height = header_height + static_cast<float>(m_pack_files_preview.size()) * row_height;
+        float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
+        float table_h = (content_height < avail_height) ? content_height : avail_height;
+        if (table_h < header_height + row_height) table_h = header_height + row_height;
 
         ImGuiTableFlags tflags = ImGuiTableFlags_Borders   |
                                  ImGuiTableFlags_RowBg     |
@@ -566,7 +577,7 @@ void App::render_pack_tab() {
 
         if (ImGui::BeginTable("##PackPreview", 1, tflags, ImVec2(0, table_h))) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_None);
+            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
             ImGuiListClipper clipper;

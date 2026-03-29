@@ -93,6 +93,7 @@ int main() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     // Load custom font (try in order of preference)
     {
@@ -125,7 +126,7 @@ int main() {
     App app;
 
     // Clear color
-    const float clear_color[4] = { 0.05f, 0.05f, 0.05f, 1.0f };
+    const float clear_color[4] = { 0.051f, 0.051f, 0.051f, 1.0f }; // #0D0D0D — match theme bg
 
     // Main loop
     bool running = true;
