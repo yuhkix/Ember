@@ -80,7 +80,7 @@ static void render_title_bar() {
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(size);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.07f, 1.0f));
 
@@ -228,6 +228,7 @@ void App::render() {
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // Position main content below the title bar
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + TITLE_BAR_H));
     ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - TITLE_BAR_H));
 
@@ -266,7 +267,8 @@ void App::render() {
 
     // Status bar at the bottom
     render_status_bar();
-
+    
+    ImGui::PopStyleVar(1);
     ImGui::End();
 }
 
@@ -380,62 +382,51 @@ void App::render_unpack_tab() {
         std::lock_guard<std::mutex> lock(m_extracted_mutex);
         int count = static_cast<int>(m_extracted_files.size());
         if (count > 0) {
-            float row_height = ImGui::GetTextLineHeightWithSpacing();
-            float header_height = row_height + 4.0f;
-            float content_height = header_height + static_cast<float>(count) * row_height;
-            float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
-            float table_h = (content_height < avail_height) ? content_height : avail_height;
-            if (table_h < header_height + row_height) table_h = header_height + row_height;
+            // Table without ScrollY: rows are rendered inline, no internal scroll region.
+            // The outer ImGui window handles scrolling if content exceeds viewport.
+            ImGuiTableFlags tflags = ImGuiTableFlags_Borders   |
+                                     ImGuiTableFlags_RowBg     |
+                                     ImGuiTableFlags_Resizable;
 
-            ImGuiTableFlags tflags = ImGuiTableFlags_Borders    |
-                                     ImGuiTableFlags_RowBg      |
-                                     ImGuiTableFlags_Resizable  |
-                                     ImGuiTableFlags_ScrollY;
-
-            if (ImGui::BeginTable("##FileList", 4, tflags, ImVec2(0, table_h))) {
-                ImGui::TableSetupScrollFreeze(0, 1);
+            if (ImGui::BeginTable("##FileList", 4, tflags)) {
                 ImGui::TableSetupColumn("Name",   ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 90.0f);
                 ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthFixed, 50.0f);
                 ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 40.0f);
                 ImGui::TableHeadersRow();
 
-                ImGuiListClipper clipper;
-                clipper.Begin(count);
-                while (clipper.Step()) {
-                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-                        const auto& ef = m_extracted_files[row];
-                        int anim_idx = row - m_extracted_stagger_base;
-                        float row_alpha = anim::row_fade(anim_idx >= 0 ? anim_idx : 0);
-                        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
+                for (int row = 0; row < count; ++row) {
+                    const auto& ef = m_extracted_files[row];
+                    int anim_idx = row - m_extracted_stagger_base;
+                    float row_alpha = anim::row_fade(anim_idx >= 0 ? anim_idx : 0);
+                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
 
-                        ImGui::TableNextRow();
+                    ImGui::TableNextRow();
 
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::TextUnformatted(ef.name.c_str());
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(ef.name.c_str());
 
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::TextUnformatted(ef.size_str.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(ef.size_str.c_str());
 
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::TextUnformatted(ef.type_str.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(ef.type_str.c_str());
 
-                        ImGui::TableSetColumnIndex(3);
-                        if (ef.success)
-                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
-                        else
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERR");
+                    ImGui::TableSetColumnIndex(3);
+                    if (ef.success)
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
+                    else
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERR");
 
-                        ImGui::PopStyleVar();
-                    }
+                    ImGui::PopStyleVar();
                 }
-
-                // Auto-scroll to bottom when extracting
-                if (m_working)
-                    ImGui::SetScrollHereY(1.0f);
 
                 ImGui::EndTable();
             }
+
+            // Auto-scroll outer window to bottom during extraction
+            if (m_working)
+                ImGui::SetScrollHereY(1.0f);
         }
     }
 }
@@ -562,35 +553,23 @@ void App::render_pack_tab() {
     // --- File preview table ---
     if (!m_pack_files_preview.empty()) {
         // Calculate table height to fit content without empty rows
-        float row_height = ImGui::GetTextLineHeightWithSpacing();
-        float header_height = row_height + 4.0f;
-        float content_height = header_height + static_cast<float>(m_pack_files_preview.size()) * row_height;
-        float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
-        float table_h = (content_height < avail_height) ? content_height : avail_height;
-        if (table_h < header_height + row_height) table_h = header_height + row_height;
+        ImGuiTableFlags tflags = ImGuiTableFlags_Borders |
+                                 ImGuiTableFlags_RowBg;
 
-        ImGuiTableFlags tflags = ImGuiTableFlags_Borders   |
-                                 ImGuiTableFlags_RowBg     |
-                                 ImGuiTableFlags_ScrollY;
-
-        if (ImGui::BeginTable("##PackPreview", 1, tflags, ImVec2(0, table_h))) {
-            ImGui::TableSetupScrollFreeze(0, 1);
+        if (ImGui::BeginTable("##PackPreview", 1, tflags)) {
             ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(m_pack_files_preview.size()));
-            while (clipper.Step()) {
-                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-                    float row_alpha = anim::row_fade(row);
-                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
+            int pack_count = static_cast<int>(m_pack_files_preview.size());
+            for (int row = 0; row < pack_count; ++row) {
+                float row_alpha = anim::row_fade(row);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
 
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(m_pack_files_preview[row].c_str());
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(m_pack_files_preview[row].c_str());
 
-                    ImGui::PopStyleVar();
-                }
+                ImGui::PopStyleVar();
             }
 
             ImGui::EndTable();
