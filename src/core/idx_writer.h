@@ -4,10 +4,10 @@
 #include <vector>
 #include <functional>
 
-enum class PackCompression { Raw, Lzma, Crunch };
+enum class PackCompression { Auto, Raw, Lzma, Crunch };
 
 struct PackOptions {
-    PackCompression compression = PackCompression::Lzma;
+    PackCompression compression = PackCompression::Auto;
     uint32_t max_data_file_size = 0; // 0 = single file, else split threshold
 };
 

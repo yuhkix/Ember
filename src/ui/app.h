@@ -49,7 +49,7 @@ private:
     // Pack state
     std::string    m_pack_source_dir;
     std::string    m_pack_output_path;
-    int            m_pack_compression = 1; // 0=Raw, 1=LZMA, 2=CRN
+    int            m_pack_compression = 0; // 0=Auto, 1=Raw, 2=LZMA, 3=CRN
     std::vector<std::string> m_pack_files_preview;
 
     // Worker thread

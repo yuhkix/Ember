@@ -121,16 +121,39 @@ bool IdxWriter::pack(const std::string& source_dir,
         }
         std::fclose(sf);
 
-        // Compress if requested
+        // Determine compression for this file
+        PackCompression file_comp = options.compression;
+        if (file_comp == PackCompression::Auto) {
+            // Auto-detect based on file extension
+            fs::path ext_path(rel);
+            std::string ext = ext_path.extension().string();
+            // Lowercase the extension
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (ext == ".dds" || ext == ".crn" || ext == ".png" || ext == ".jpg" ||
+                ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".ogg" ||
+                ext == ".wav" || ext == ".mp3") {
+                // Already-compressed or binary media — store raw
+                file_comp = PackCompression::Raw;
+            } else if (file_size < 128) {
+                // Tiny files — not worth compressing
+                file_comp = PackCompression::Raw;
+            } else {
+                // Everything else — LZMA
+                file_comp = PackCompression::Lzma;
+            }
+        }
+
+        // Compress
         std::vector<uint8_t> payload;
         bool compressed = false;
 
-        if (options.compression == PackCompression::Lzma && file_size > 0) {
+        if (file_comp == PackCompression::Lzma && file_size > 0) {
             payload = lzma::compress(raw_data.data(), raw_data.size());
             if (!payload.empty() && payload.size() < file_size) {
                 compressed = true;
             } else {
-                payload.clear(); // fall back to raw
+                payload.clear(); // compression didn't help — fall back to raw
             }
         }
 

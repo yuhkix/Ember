@@ -29,20 +29,32 @@ CompressionType IdxReader::detect_compression(const DataChunkHeader& hdr,
     if (hdr.total_size == hdr.compressed_size + 28)
         return CompressionType::Raw;
 
-    // Otherwise peek at the first byte after the 28-byte chunk header
+    // Peek at the first 2 bytes after the 28-byte chunk header
     FILE* f = std::fopen(data_file.c_str(), "rb");
     if (!f)
-        return CompressionType::Raw; // fallback
+        return CompressionType::Raw;
 
     std::fseek(f, static_cast<long>(data_offset) + 28, SEEK_SET);
-    uint8_t tag = 0;
-    std::fread(&tag, 1, 1, f);
+    uint8_t tag[2] = {};
+    std::fread(tag, 1, 2, f);
     std::fclose(f);
 
-    if (tag == 0x5D)
+    // LZMA: first byte is the properties byte (commonly 0x5D but can vary)
+    // Standard LZMA props byte encodes lc/lp/pb: valid range is 0..224
+    if (tag[0] == 0x5D)
         return CompressionType::Lzma;
 
-    return CompressionType::Crunch;
+    // CRN: magic bytes "Hx" (0x48 0x78) at start
+    if (tag[0] == 0x48 && tag[1] == 0x78)
+        return CompressionType::Crunch;
+
+    // Fallback: try LZMA if properties byte looks valid (lc+lp <= 8, pb <= 4)
+    // props = pb * 45 + lp * 9 + lc, max = 4*45+4*9+8 = 224
+    if (tag[0] <= 224)
+        return CompressionType::Lzma;
+
+    // Unknown compression — treat as raw
+    return CompressionType::Raw;
 }
 
 // ---- open ----
@@ -189,6 +201,18 @@ bool IdxReader::extract_entry(const IdxEntry& entry, const std::string& output_d
                 if (of) {
                     ok = (std::fwrite(decoded.data(), 1, decoded.size(), of) == decoded.size());
                     std::fclose(of);
+                }
+            } else {
+                // LZMA decompression failed — fallback to raw copy
+                std::fseek(df, static_cast<long>(entry.fixed.data_offset) + 28, SEEK_SET);
+                uint32_t raw_sz = entry.data_header.compressed_size;
+                std::vector<uint8_t> raw(raw_sz);
+                if (std::fread(raw.data(), 1, raw_sz, df) == raw_sz) {
+                    FILE* of = std::fopen(out_path.string().c_str(), "wb");
+                    if (of) {
+                        ok = (std::fwrite(raw.data(), 1, raw_sz, of) == raw_sz);
+                        std::fclose(of);
+                    }
                 }
             }
         }

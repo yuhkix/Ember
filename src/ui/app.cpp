@@ -465,11 +465,13 @@ void App::render_pack_tab() {
     // --- Compression selector ---
     ImGui::Text("Compression:");
     ImGui::SameLine();
-    ImGui::RadioButton("Raw",  &m_pack_compression, 0);
+    ImGui::RadioButton("Auto", &m_pack_compression, 0);
     ImGui::SameLine();
-    ImGui::RadioButton("LZMA", &m_pack_compression, 1);
+    ImGui::RadioButton("Raw",  &m_pack_compression, 1);
     ImGui::SameLine();
-    ImGui::RadioButton("CRN",  &m_pack_compression, 2);
+    ImGui::RadioButton("LZMA", &m_pack_compression, 2);
+    ImGui::SameLine();
+    ImGui::RadioButton("CRN",  &m_pack_compression, 3);
 
     ImGui::Spacing();
 
@@ -612,10 +614,11 @@ void App::start_pack() {
     m_worker = std::thread([this, src, out, comp]() {
         PackOptions opts;
         switch (comp) {
-        case 0: opts.compression = PackCompression::Raw;    break;
-        case 1: opts.compression = PackCompression::Lzma;   break;
-        case 2: opts.compression = PackCompression::Crunch;  break;
-        default: opts.compression = PackCompression::Lzma;   break;
+        case 0: opts.compression = PackCompression::Auto;    break;
+        case 1: opts.compression = PackCompression::Raw;     break;
+        case 2: opts.compression = PackCompression::Lzma;    break;
+        case 3: opts.compression = PackCompression::Crunch;  break;
+        default: opts.compression = PackCompression::Auto;   break;
         }
 
         IdxWriter writer;
