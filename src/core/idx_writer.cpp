@@ -437,26 +437,22 @@ bool IdxWriter::inject(const std::string& existing_idx,
         base_dir += '/';
     std::string base_name = idx_p.stem().string();
 
-    // ---- 7. Find highest data file, open for appending ----
+    // ---- 7. Create a NEW data file for injected data (don't touch originals) ----
     uint8_t highest_data_index = 0;
     for (const auto& e : orig_entries)
         if (e.fixed.data_file_index > highest_data_index)
             highest_data_index = e.fixed.data_file_index;
 
-    std::string data_path = make_data_path(base_dir, base_name, highest_data_index);
-    uint32_t append_offset = 0;
-    {
-        std::error_code ec;
-        if (fs::exists(data_path, ec))
-            append_offset = static_cast<uint32_t>(fs::file_size(data_path, ec));
-    }
+    // Use NEXT index so original data files are completely untouched
+    uint8_t inject_data_index = highest_data_index + 1;
+    std::string data_path = make_data_path(base_dir, base_name, inject_data_index);
 
-    FILE* df = std::fopen(data_path.c_str(), "ab");
-    if (!df) { m_error = "Cannot open data file: " + data_path; return false; }
+    FILE* df = std::fopen(data_path.c_str(), "wb");
+    if (!df) { m_error = "Cannot create data file: " + data_path; return false; }
 
     fs::path src_root = fs::canonical(source_dir);
-    uint8_t current_data_index = highest_data_index;
-    uint32_t current_offset = append_offset;
+    uint8_t current_data_index = inject_data_index;
+    uint32_t current_offset = 0;
 
     // ---- 8. Write data chunks for injected files, track offsets ----
     struct InjectedInfo { uint32_t data_offset; uint8_t data_file_index; };
