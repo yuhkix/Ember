@@ -376,26 +376,35 @@ bool IdxWriter::inject(const std::string& existing_idx,
                        ProgressCallback progress) {
     m_error.clear();
 
-    // ---- 1. Parse existing IDX ----
-    IdxReader reader;
-    if (!reader.open(existing_idx)) {
-        m_error = "Cannot open existing IDX: " + reader.error();
-        return false;
+    // ---- 1. Read ENTIRE original .idx as raw bytes ----
+    std::vector<uint8_t> idx_bytes;
+    {
+        FILE* f = std::fopen(existing_idx.c_str(), "rb");
+        if (!f) { m_error = "Cannot open IDX: " + existing_idx; return false; }
+        std::fseek(f, 0, SEEK_END);
+        size_t sz = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        idx_bytes.resize(sz);
+        std::fread(idx_bytes.data(), 1, sz, f);
+        std::fclose(f);
     }
 
-    const IdxHeader& orig_header = reader.header();
+    if (idx_bytes.size() < 24) { m_error = "IDX too small"; return false; }
+
+    // ---- 2. Parse header to find entries (but keep raw bytes) ----
+    IdxReader reader;
+    if (!reader.open(existing_idx)) {
+        m_error = "Cannot parse IDX: " + reader.error();
+        return false;
+    }
     const auto& orig_entries = reader.entries();
 
-    // ---- 2. Scan source directory for files to inject ----
+    // ---- 3. Scan source directory ----
     std::vector<std::string> inject_rel_paths;
     {
         std::error_code ec;
         fs::path src_root = fs::canonical(source_dir, ec);
-        if (ec) {
-            m_error = "Cannot resolve source directory: " + source_dir;
-            return false;
-        }
-
+        if (ec) { m_error = "Cannot resolve source dir"; return false; }
         for (auto& de : fs::recursive_directory_iterator(src_root, ec)) {
             if (ec) break;
             if (!de.is_regular_file()) continue;
@@ -405,351 +414,143 @@ bool IdxWriter::inject(const std::string& existing_idx,
             std::replace(s.begin(), s.end(), '/', '\\');
             inject_rel_paths.push_back(std::move(s));
         }
-        if (ec && inject_rel_paths.empty()) {
-            m_error = "Failed to scan source directory: " + ec.message();
-            return false;
-        }
     }
+    if (inject_rel_paths.empty()) { m_error = "No files to inject"; return false; }
 
-    std::sort(inject_rel_paths.begin(), inject_rel_paths.end());
+    // ---- 4. Build lookup: normalized_name -> index in inject_rel_paths ----
+    std::unordered_map<std::string, size_t> inject_map;
+    for (size_t i = 0; i < inject_rel_paths.size(); i++)
+        inject_map[normalize_path(inject_rel_paths[i])] = i;
 
-    if (inject_rel_paths.empty()) {
-        m_error = "No files found in source directory";
-        return false;
-    }
-
-    // ---- 3. Build set of normalized inject paths for quick lookup ----
-    std::unordered_set<std::string> inject_set;
-    for (const auto& p : inject_rel_paths)
-        inject_set.insert(normalize_path(p));
-
-    // ---- 4. Backup original .idx to .idx.bak ----
+    // ---- 5. Backup .idx ----
     {
-        std::string bak_path = existing_idx + ".bak";
+        std::string bak = existing_idx + ".bak";
         std::error_code ec;
-        if (!fs::exists(bak_path, ec)) {
-            fs::copy_file(existing_idx, bak_path, ec);
-            if (ec) {
-                m_error = "Failed to backup IDX: " + ec.message();
-                return false;
-            }
-        }
+        if (!fs::exists(bak, ec))
+            fs::copy_file(existing_idx, bak, ec);
     }
 
-    // ---- 5. Derive base directory and base name ----
+    // ---- 6. Derive paths ----
     fs::path idx_p(existing_idx);
     std::string base_dir = idx_p.parent_path().string();
     if (!base_dir.empty() && base_dir.back() != '/' && base_dir.back() != '\\')
         base_dir += '/';
     std::string base_name = idx_p.stem().string();
 
-    // ---- 6. Find highest existing data file ----
+    // ---- 7. Find highest data file, open for appending ----
     uint8_t highest_data_index = 0;
-    for (const auto& entry : orig_entries) {
-        if (entry.fixed.data_file_index > highest_data_index)
-            highest_data_index = entry.fixed.data_file_index;
-    }
+    for (const auto& e : orig_entries)
+        if (e.fixed.data_file_index > highest_data_index)
+            highest_data_index = e.fixed.data_file_index;
 
-    // Open the highest data file for appending
     std::string data_path = make_data_path(base_dir, base_name, highest_data_index);
-
-    // Get current size of the data file (we append after it)
-    uint32_t current_offset = 0;
+    uint32_t append_offset = 0;
     {
         std::error_code ec;
-        if (fs::exists(data_path, ec)) {
-            current_offset = static_cast<uint32_t>(fs::file_size(data_path, ec));
-            if (ec) current_offset = 0;
-        }
+        if (fs::exists(data_path, ec))
+            append_offset = static_cast<uint32_t>(fs::file_size(data_path, ec));
     }
-
-    uint8_t current_data_index = highest_data_index;
 
     FILE* df = std::fopen(data_path.c_str(), "ab");
-    if (!df) {
-        m_error = "Cannot open data file for appending: " + data_path;
-        return false;
-    }
+    if (!df) { m_error = "Cannot open data file: " + data_path; return false; }
 
     fs::path src_root = fs::canonical(source_dir);
+    uint8_t current_data_index = highest_data_index;
+    uint32_t current_offset = append_offset;
 
-    // ---- 7. Process injected files — write data chunks ----
-    // For each injected file, store the resulting entry record
-    struct InjectedRecord {
-        IdxEntryFixed fixed;
-        std::string   filename;
-    };
-    std::vector<InjectedRecord> injected_records;
-    injected_records.reserve(inject_rel_paths.size());
+    // ---- 8. Write data chunks for injected files, track offsets ----
+    struct InjectedInfo { uint32_t data_offset; uint8_t data_file_index; };
+    std::unordered_map<std::string, InjectedInfo> injected_info; // norm_path -> info
 
     int total = static_cast<int>(inject_rel_paths.size());
-
-    for (int i = 0; i < total; ++i) {
+    for (int i = 0; i < total; i++) {
         const std::string& rel = inject_rel_paths[i];
         fs::path abs = src_root / rel;
 
-        // Read source file
         FILE* sf = std::fopen(abs.string().c_str(), "rb");
-        if (!sf) {
-            m_error = "Cannot open source file: " + abs.string();
-            std::fclose(df);
-            return false;
-        }
+        if (!sf) { std::fclose(df); m_error = "Cannot read: " + abs.string(); return false; }
         std::fseek(sf, 0, SEEK_END);
-        size_t file_size = static_cast<size_t>(std::ftell(sf));
+        size_t file_size = std::ftell(sf);
         std::fseek(sf, 0, SEEK_SET);
-
         std::vector<uint8_t> raw_data(file_size);
-        if (file_size > 0) {
-            if (std::fread(raw_data.data(), 1, file_size, sf) != file_size) {
-                m_error = "Failed to read source file: " + abs.string();
-                std::fclose(sf);
-                std::fclose(df);
-                return false;
-            }
-        }
+        if (file_size > 0) std::fread(raw_data.data(), 1, file_size, sf);
         std::fclose(sf);
-
-        // Determine compression
-        PackCompression file_comp = options.compression;
-        if (file_comp == PackCompression::Auto) {
-            fs::path ext_path(rel);
-            std::string ext = ext_path.extension().string();
-            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-            if (ext == ".dds" || ext == ".crn" || ext == ".png" || ext == ".jpg" ||
-                ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".ogg" ||
-                ext == ".wav" || ext == ".mp3") {
-                file_comp = PackCompression::Raw;
-            } else if (file_size < 128) {
-                file_comp = PackCompression::Raw;
-            } else {
-                file_comp = PackCompression::Lzma;
-            }
-        }
 
         // Compress
         std::vector<uint8_t> payload;
         bool compressed = false;
-
+        PackCompression file_comp = options.compression;
+        if (file_comp == PackCompression::Auto) {
+            std::string ext = fs::path(rel).extension().string();
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext == ".dds" || ext == ".crn" || ext == ".png" || ext == ".jpg" ||
+                ext == ".ogg" || ext == ".wav" || ext == ".mp3" || file_size < 128)
+                file_comp = PackCompression::Raw;
+            else
+                file_comp = PackCompression::Lzma;
+        }
         if (file_comp == PackCompression::Lzma && file_size > 0) {
             payload = lzma::compress(raw_data.data(), raw_data.size());
-            if (!payload.empty() && payload.size() < file_size) {
-                compressed = true;
-            } else {
-                payload.clear();
-            }
+            if (!payload.empty() && payload.size() < file_size) compressed = true;
+            else payload.clear();
         }
-
-        if (!compressed) {
-            payload = std::move(raw_data);
-        }
+        if (!compressed) payload = std::move(raw_data);
 
         uint32_t payload_size = static_cast<uint32_t>(payload.size());
 
-        // Check if we need to split to a new data file
-        if (options.max_data_file_size > 0 && current_offset > 0 &&
-            (current_offset + 28 + payload_size) > options.max_data_file_size) {
-            std::fclose(df);
-            ++current_data_index;
-            data_path = make_data_path(base_dir, base_name, current_data_index);
-            df = std::fopen(data_path.c_str(), "wb");
-            if (!df) {
-                m_error = "Cannot create data file: " + data_path;
-                return false;
-            }
-            current_offset = 0;
-        }
-
-        // Build DataChunkHeader
         DataChunkHeader chdr{};
-        if (compressed) {
-            chdr.total_size      = payload_size + 28;
-            chdr.compressed_size = static_cast<uint32_t>(file_size);
-        } else {
-            chdr.total_size      = payload_size + 28;
-            chdr.compressed_size = payload_size;
-        }
+        chdr.total_size = payload_size + 28;
+        chdr.compressed_size = compressed ? static_cast<uint32_t>(file_size) : payload_size;
 
-        // Write DataChunkHeader (28 bytes)
-        if (std::fwrite(&chdr, sizeof(DataChunkHeader), 1, df) != 1) {
-            m_error = "Failed to write data chunk header";
-            std::fclose(df);
-            return false;
-        }
+        std::fwrite(&chdr, sizeof(DataChunkHeader), 1, df);
+        if (payload_size > 0) std::fwrite(payload.data(), 1, payload_size, df);
 
-        // Write payload
-        if (payload_size > 0) {
-            if (std::fwrite(payload.data(), 1, payload_size, df) != payload_size) {
-                m_error = "Failed to write payload data";
-                std::fclose(df);
-                return false;
-            }
-        }
-
-        // Record the injected entry
-        InjectedRecord rec{};
-        rec.fixed.field_0         = 2;
-        rec.fixed.data_offset     = current_offset;
-        rec.fixed.data_file_index = current_data_index;
-        rec.filename              = rel;
-        injected_records.push_back(std::move(rec));
-
+        injected_info[normalize_path(rel)] = { current_offset, current_data_index };
         current_offset += 28 + payload_size;
 
-        // Progress callback
-        if (progress) {
-            if (!progress(i + 1, total)) {
-                std::fclose(df);
-                m_error = "Cancelled by user";
-                return false;
-            }
+        if (progress && !progress(i + 1, total)) {
+            std::fclose(df);
+            m_error = "Cancelled";
+            return false;
         }
     }
-
     std::fclose(df);
 
-    // ---- 8. Build final entry list: original (non-replaced) + replaced/new ----
-    struct EntryRecord {
-        IdxEntryFixed fixed;
-        std::string   filename;
-    };
-    std::vector<EntryRecord> records;
-    records.reserve(orig_entries.size() + injected_records.size());
+    // ---- 9. Binary-patch the .idx: only modify data_offset + data_file_index for replaced entries ----
+    // Scan through raw bytes to find each entry and patch in-place
+    size_t pos = 24; // skip header
+    for (uint32_t i = 0; i < reader.header().file_count && pos + 33 <= idx_bytes.size(); i++) {
+        // Read filename from raw bytes (field_8 at offset 29 from entry start)
+        uint32_t name_len = 0;
+        std::memcpy(&name_len, &idx_bytes[pos + 29], 4);
 
-    // Map injected files by normalized path for quick lookup
-    std::unordered_map<std::string, size_t> inject_map; // normalized path -> index in injected_records
-    for (size_t i = 0; i < injected_records.size(); ++i) {
-        inject_map[normalize_path(injected_records[i].filename)] = i;
-    }
+        // Sanity check
+        if (name_len == 0 || pos + 33 + name_len > idx_bytes.size()) break;
 
-    // Add original entries — for replaced ones, keep original fields but update offset/index
-    std::unordered_set<std::string> used_inject_paths;
-    for (const auto& orig : orig_entries) {
-        std::string norm = normalize_path(orig.filename);
-        auto it = inject_map.find(norm);
-        if (it != inject_map.end()) {
-            // REPLACE: keep original entry's metadata but update data location
-            EntryRecord rec{};
-            rec.fixed = orig.fixed;
-            rec.fixed.data_offset     = injected_records[it->second].fixed.data_offset;
-            rec.fixed.data_file_index = injected_records[it->second].fixed.data_file_index;
-            rec.filename              = orig.filename; // preserve original filename casing
-            records.push_back(std::move(rec));
-            used_inject_paths.insert(norm);
-        } else {
-            // KEEP: entry is unchanged
-            EntryRecord rec{};
-            rec.fixed    = orig.fixed;
-            rec.filename = orig.filename;
-            records.push_back(std::move(rec));
+        // Extract filename from raw bytes
+        std::string entry_name(reinterpret_cast<const char*>(&idx_bytes[pos + 33]), name_len);
+        // Trim at null
+        size_t null_pos = entry_name.find('\0');
+        if (null_pos != std::string::npos) entry_name.resize(null_pos);
+
+        // Check if this entry should be replaced
+        auto it = injected_info.find(normalize_path(entry_name));
+        if (it != injected_info.end()) {
+            // Patch data_offset (4 bytes at offset +12 from entry start)
+            std::memcpy(&idx_bytes[pos + 12], &it->second.data_offset, 4);
+            // Patch data_file_index (1 byte at offset +24 from entry start)
+            idx_bytes[pos + 24] = it->second.data_file_index;
         }
+
+        pos += 33 + name_len; // advance to next entry
     }
 
-    // Add NEW entries (injected files that don't replace anything)
-    for (const auto& inj : injected_records) {
-        std::string norm = normalize_path(inj.filename);
-        if (used_inject_paths.find(norm) == used_inject_paths.end()) {
-            EntryRecord rec{};
-            rec.fixed    = inj.fixed;
-            rec.filename = inj.filename;
-            records.push_back(std::move(rec));
-        }
-    }
-
-    // ---- 9. Write new IDX file ----
+    // ---- 10. Write patched .idx bytes back (exact same size for replaced-only) ----
     FILE* idx = std::fopen(existing_idx.c_str(), "wb");
-    if (!idx) {
-        m_error = "Cannot write IDX file: " + existing_idx;
-        return false;
-    }
-
-    if (orig_header.is_new_format) {
-        // New format header: preserve original version string
-        IdxHeaderNew hdr{};
-        hdr.magic = IDX_MAGIC_NEW;
-        std::memcpy(hdr.version, orig_header.version, sizeof(hdr.version));
-        hdr.file_count = static_cast<uint32_t>(records.size());
-        if (std::fwrite(&hdr, sizeof(IdxHeaderNew), 1, idx) != 1) {
-            m_error = "Failed to write IDX header";
-            std::fclose(idx);
-            return false;
-        }
-
-        // Per-entry: field-by-field (33 bytes fixed + filename)
-        for (auto& rec : records) {
-            // Ensure field_8 matches actual name length
-            uint32_t name_len = static_cast<uint32_t>(rec.filename.size()) + 1;
-            if (rec.fixed.field_8 == 0 || rec.fixed.field_8 != name_len)
-                rec.fixed.field_8 = name_len;
-
-            if (!write_val(idx, rec.fixed.field_0) ||
-                !write_val(idx, rec.fixed.field_1) ||
-                !write_val(idx, rec.fixed.field_2) ||
-                !write_val(idx, rec.fixed.data_offset) ||
-                !write_val(idx, rec.fixed.field_4) ||
-                !write_val(idx, rec.fixed.field_5) ||
-                !write_val(idx, rec.fixed.data_file_index) ||
-                !write_val(idx, rec.fixed.field_7) ||
-                !write_val(idx, rec.fixed.field_8)) {
-                m_error = "Failed to write IDX entry fixed fields";
-                std::fclose(idx);
-                return false;
-            }
-
-            if (std::fwrite(rec.filename.c_str(), 1, name_len, idx) != name_len) {
-                m_error = "Failed to write IDX entry filename";
-                std::fclose(idx);
-                return false;
-            }
-        }
-    } else {
-        // Old format header
-        IdxHeaderOld hdr{};
-        hdr.file_count = static_cast<uint32_t>(records.size());
-        if (std::fwrite(&hdr, sizeof(IdxHeaderOld), 1, idx) != 1) {
-            m_error = "Failed to write IDX header";
-            std::fclose(idx);
-            return false;
-        }
-
-        // Old format entries: field-by-field (33 bytes fixed + filename)
-        for (auto& rec : records) {
-            uint32_t name_len = static_cast<uint32_t>(rec.filename.size()) + 1;
-            if (rec.fixed.field_8 == 0 || rec.fixed.field_8 != name_len)
-                rec.fixed.field_8 = name_len;
-
-            if (!write_val(idx, rec.fixed.field_0) ||
-                !write_val(idx, rec.fixed.field_1) ||
-                !write_val(idx, rec.fixed.field_2) ||
-                !write_val(idx, rec.fixed.data_offset) ||
-                !write_val(idx, rec.fixed.field_4) ||
-                !write_val(idx, rec.fixed.field_5) ||
-                !write_val(idx, rec.fixed.data_file_index) ||
-                !write_val(idx, rec.fixed.field_7) ||
-                !write_val(idx, rec.fixed.field_8)) {
-                m_error = "Failed to write IDX entry fixed fields";
-                std::fclose(idx);
-                return false;
-            }
-
-            if (std::fwrite(rec.filename.c_str(), 1, name_len, idx) != name_len) {
-                m_error = "Failed to write IDX entry filename";
-                std::fclose(idx);
-                return false;
-            }
-        }
-    }
-
+    if (!idx) { m_error = "Cannot write IDX"; return false; }
+    std::fwrite(idx_bytes.data(), 1, idx_bytes.size(), idx);
     std::fclose(idx);
 
-    // NOTE: We do NOT regenerate .hidx during inject.
-    // The game uses its own hash algorithm for .hidx lookups which we can't replicate.
-    // The original .hidx remains valid for all original entries.
-    // The game also falls back to linear .idx search for entries not in .hidx.
-
-    // NOTE: We do NOT regenerate .fsidx during inject either.
-    // The original .fsidx remains valid for all original entries.
-
+    // .hidx and .fsidx are NOT touched — they remain exactly as original
     return true;
 }
