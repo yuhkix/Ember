@@ -678,8 +678,10 @@ bool IdxWriter::inject(const std::string& existing_idx,
 
         // Per-entry: field-by-field (33 bytes fixed + filename)
         for (auto& rec : records) {
+            // Ensure field_8 matches actual name length
             uint32_t name_len = static_cast<uint32_t>(rec.filename.size()) + 1;
-            rec.fixed.field_8 = name_len;
+            if (rec.fixed.field_8 == 0 || rec.fixed.field_8 != name_len)
+                rec.fixed.field_8 = name_len;
 
             if (!write_val(idx, rec.fixed.field_0) ||
                 !write_val(idx, rec.fixed.field_1) ||
@@ -714,7 +716,8 @@ bool IdxWriter::inject(const std::string& existing_idx,
         // Old format entries: field-by-field (33 bytes fixed + filename)
         for (auto& rec : records) {
             uint32_t name_len = static_cast<uint32_t>(rec.filename.size()) + 1;
-            rec.fixed.field_8 = name_len;
+            if (rec.fixed.field_8 == 0 || rec.fixed.field_8 != name_len)
+                rec.fixed.field_8 = name_len;
 
             if (!write_val(idx, rec.fixed.field_0) ||
                 !write_val(idx, rec.fixed.field_1) ||
@@ -740,80 +743,13 @@ bool IdxWriter::inject(const std::string& existing_idx,
 
     std::fclose(idx);
 
-    // ---- 10. Regenerate .hidx ----
-    {
-        std::string hidx_path = base_dir + base_name + ".hidx";
+    // NOTE: We do NOT regenerate .hidx during inject.
+    // The game uses its own hash algorithm for .hidx lookups which we can't replicate.
+    // The original .hidx remains valid for all original entries.
+    // The game also falls back to linear .idx search for entries not in .hidx.
 
-        // Backup original .hidx if it exists
-        std::error_code ec;
-        if (fs::exists(hidx_path, ec)) {
-            std::string hidx_bak = hidx_path + ".bak";
-            if (!fs::exists(hidx_bak, ec)) {
-                fs::copy_file(hidx_path, hidx_bak, ec);
-            }
-        }
-
-        FILE* hf = std::fopen(hidx_path.c_str(), "wb");
-        if (hf) {
-            uint32_t magic = HIDX_MAGIC;
-            uint32_t count = static_cast<uint32_t>(records.size());
-            std::fwrite(&magic, 4, 1, hf);
-            std::fwrite(&count, 4, 1, hf);
-
-            // Calculate entry offsets in the IDX file
-            uint32_t idx_offset = orig_header.is_new_format ? 24u : 24u; // both are 24 bytes
-            for (const auto& rec : records) {
-                HidxEntry he{};
-                he.hash   = fnv1a_hash(rec.filename);
-                he.flags  = 1;
-                he.offset = idx_offset;
-                he.size   = 33 + static_cast<uint32_t>(rec.filename.size()) + 1;
-                std::fwrite(&he, sizeof(HidxEntry), 1, hf);
-
-                idx_offset += he.size;
-            }
-            std::fclose(hf);
-        }
-    }
-
-    // ---- 11. Regenerate .fsidx ----
-    {
-        std::string fsidx_path = base_dir + base_name + ".fsidx";
-
-        // Backup original .fsidx if it exists
-        std::error_code ec;
-        if (fs::exists(fsidx_path, ec)) {
-            std::string fsidx_bak = fsidx_path + ".bak";
-            if (!fs::exists(fsidx_bak, ec)) {
-                fs::copy_file(fsidx_path, fsidx_bak, ec);
-            }
-        }
-
-        FILE* ff = std::fopen(fsidx_path.c_str(), "wb");
-        if (ff) {
-            FsidxHeader fhdr{};
-            fhdr.magic_version[0] = 0x70;
-            fhdr.magic_version[1] = 0x89;
-            fhdr.magic_version[2] = 0x57;
-            fhdr.magic_version[3] = 0x46;
-            std::strncpy(reinterpret_cast<char*>(fhdr.magic_version + 4), "1.0.0.em", 12);
-            fhdr.field1 = 0;
-            fhdr.entry_count = static_cast<uint32_t>(records.size());
-            std::fwrite(&fhdr, sizeof(FsidxHeader), 1, ff);
-
-            for (const auto& rec : records) {
-                FsidxEntry fe{};
-                fe.fields[0] = fnv1a_hash(rec.filename);
-                fe.fields[1] = fnv1a_hash(rec.filename) ^ 0xA5A5;
-                fe.fields[2] = rec.fixed.data_offset;
-                fe.fields[3] = rec.fixed.data_file_index;
-                fe.fields[4] = 0;
-                fe.fields[5] = 0;
-                std::fwrite(&fe, sizeof(FsidxEntry), 1, ff);
-            }
-            std::fclose(ff);
-        }
-    }
+    // NOTE: We do NOT regenerate .fsidx during inject either.
+    // The original .fsidx remains valid for all original entries.
 
     return true;
 }
