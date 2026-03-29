@@ -1,4 +1,6 @@
 #include "idx_writer.h"
+#include "hidx_reader.h"
+#include "fsidx_reader.h"
 #include "lzma_codec.h"
 
 #include <cstdio>
@@ -12,6 +14,18 @@ namespace fs = std::filesystem;
 template<typename T>
 static bool write_val(FILE* f, const T& val) {
     return std::fwrite(&val, sizeof(T), 1, f) == 1;
+}
+
+// Simple FNV-1a hash for filenames (32-bit)
+static uint32_t fnv1a_hash(const std::string& s) {
+    uint32_t hash = 0x811c9dc5u;
+    for (char c : s) {
+        // Case-insensitive, normalize separators
+        char ch = (c == '/') ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        hash ^= static_cast<uint32_t>(ch);
+        hash *= 0x01000193u;
+    }
+    return hash;
 }
 
 // Format data file path: base_path + ".p001", ".p002", etc.
@@ -269,5 +283,67 @@ bool IdxWriter::pack(const std::string& source_dir,
     }
 
     std::fclose(idx);
+
+    // ---- 5. Generate .hidx (hash index) ----
+    {
+        std::string hidx_path = base_dir + base_name + ".hidx";
+        FILE* hf = std::fopen(hidx_path.c_str(), "wb");
+        if (hf) {
+            uint32_t magic = HIDX_MAGIC;
+            uint32_t count = static_cast<uint32_t>(records.size());
+            std::fwrite(&magic, 4, 1, hf);
+            std::fwrite(&count, 4, 1, hf);
+
+            // Calculate entry offsets in the IDX file
+            // Header = 24 bytes, then entries are sequential
+            uint32_t idx_offset = 24; // after IdxHeader
+            for (const auto& rec : records) {
+                HidxEntry he{};
+                he.hash   = fnv1a_hash(rec.filename);
+                he.flags  = 1;
+                he.offset = idx_offset;
+                // Entry size = 33 fixed bytes + filename length + 1 null
+                he.size   = 33 + static_cast<uint32_t>(rec.filename.size()) + 1;
+                std::fwrite(&he, sizeof(HidxEntry), 1, hf);
+
+                idx_offset += he.size;
+            }
+            std::fclose(hf);
+        }
+    }
+
+    // ---- 6. Generate .fsidx (filesystem index) ----
+    {
+        std::string fsidx_path = base_dir + base_name + ".fsidx";
+        FILE* ff = std::fopen(fsidx_path.c_str(), "wb");
+        if (ff) {
+            // Header: magic+version(16) + field1(4) + count(4) = 24 bytes
+            FsidxHeader fhdr{};
+            // "p\x89WF" magic + version "1.0.0.em\0"
+            fhdr.magic_version[0] = 0x70; // 'p'
+            fhdr.magic_version[1] = 0x89;
+            fhdr.magic_version[2] = 0x57; // 'W'
+            fhdr.magic_version[3] = 0x46; // 'F'
+            std::strncpy(reinterpret_cast<char*>(fhdr.magic_version + 4), "1.0.0.em", 12);
+            fhdr.field1 = 0;
+            fhdr.entry_count = static_cast<uint32_t>(records.size());
+            std::fwrite(&fhdr, sizeof(FsidxHeader), 1, ff);
+
+            // Per entry: 6 × uint32 (hash, hash2, data_hash, offset, size, flags)
+            uint32_t data_offset_acc = 0;
+            for (const auto& rec : records) {
+                FsidxEntry fe{};
+                fe.fields[0] = fnv1a_hash(rec.filename);           // filename hash
+                fe.fields[1] = fnv1a_hash(rec.filename) ^ 0xA5A5;  // secondary hash
+                fe.fields[2] = rec.fixed.data_offset;               // data file offset
+                fe.fields[3] = rec.fixed.data_file_index;           // data file index
+                fe.fields[4] = 0;                                    // reserved
+                fe.fields[5] = 0;                                    // reserved
+                std::fwrite(&fe, sizeof(FsidxEntry), 1, ff);
+            }
+            std::fclose(ff);
+        }
+    }
+
     return true;
 }
