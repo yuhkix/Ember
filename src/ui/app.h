@@ -25,7 +25,7 @@ public:
     void render();
 
 private:
-    int m_active_tab = 0; // 0=Unpack, 1=Pack, 2=Index
+    int m_active_tab = 0; // 0=Unpack, 1=Pack, 2=Inject, 3=Index
 
     // Unpack state
     std::string m_idx_path;
@@ -56,6 +56,13 @@ private:
     int            m_pack_compression = 0; // 0=Auto, 1=Raw, 2=LZMA, 3=CRN
     std::vector<std::string> m_pack_files_preview;
 
+    // Inject state
+    std::string m_inject_idx_path;      // existing .idx to inject into
+    std::string m_inject_source_dir;    // files to inject
+    int         m_inject_compression = 0; // 0=Auto, 1=Raw, 2=LZMA, 3=CRN
+    std::vector<std::string> m_inject_files_preview;
+    widgets::FileListState m_inject_list_state;
+
     // Worker thread
     std::thread       m_worker;
     std::atomic<bool> m_working{false};
@@ -77,9 +84,11 @@ private:
 
     void render_unpack_tab();
     void render_pack_tab();
+    void render_inject_tab();
     void render_index_tab();
     void render_status_bar();
     void start_unpack();
     void start_pack();
+    void start_inject();
     void set_status(const std::string& msg);
 };

@@ -263,9 +263,17 @@ void App::render() {
             ImGui::PopStyleVar();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Index")) {
+        if (ImGui::BeginTabItem("Inject")) {
             m_active_tab = 2;
             float alpha = anim::tab_fade(2);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
+            render_inject_tab();
+            ImGui::PopStyleVar();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Index")) {
+            m_active_tab = 3;
+            float alpha = anim::tab_fade(3);
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
             render_index_tab();
             ImGui::PopStyleVar();
@@ -530,6 +538,140 @@ void App::render_pack_tab() {
 }
 
 // ---------------------------------------------------------------------------
+// render_inject_tab()
+// ---------------------------------------------------------------------------
+
+void App::render_inject_tab() {
+    // --- Target IDX row ---
+    ImGui::Text("Target IDX:");
+    ImGui::SameLine();
+    {
+        char buf[512];
+        std::memset(buf, 0, sizeof(buf));
+        std::strncpy(buf, m_inject_idx_path.c_str(), sizeof(buf) - 1);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80.0f);
+        ImGui::InputText("##inject_idx", buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##injectidx")) {
+        nfdu8char_t* outPath = nullptr;
+        nfdu8filteritem_t filter = { "IDX files", "idx" };
+        nfdopendialogu8args_t args = {};
+        args.filterList  = &filter;
+        args.filterCount = 1;
+        if (NFD_OpenDialogU8_With(&outPath, &args) == NFD_OKAY) {
+            m_inject_idx_path = outPath;
+            NFD_FreePathU8(outPath);
+            set_status("Target: " + m_inject_idx_path);
+        }
+    }
+
+    // --- Source folder row ---
+    ImGui::Text("Source Folder:");
+    ImGui::SameLine();
+    {
+        char buf[512];
+        std::memset(buf, 0, sizeof(buf));
+        std::strncpy(buf, m_inject_source_dir.c_str(), sizeof(buf) - 1);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80.0f);
+        if (ImGui::InputText("##inject_src", buf, sizeof(buf))) {
+            m_inject_source_dir = buf;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##injectsrc")) {
+        nfdu8char_t* outPath = nullptr;
+        if (NFD_PickFolderU8(&outPath, nullptr) == NFD_OKAY) {
+            m_inject_source_dir = outPath;
+            NFD_FreePathU8(outPath);
+
+            // Scan directory for preview
+            m_inject_files_preview.clear();
+            std::error_code ec;
+            for (auto& de : fs::recursive_directory_iterator(m_inject_source_dir, ec)) {
+                if (ec) break;
+                if (!de.is_regular_file()) continue;
+                fs::path rel = fs::relative(de.path(), m_inject_source_dir, ec);
+                if (!ec)
+                    m_inject_files_preview.push_back(rel.string());
+            }
+            std::sort(m_inject_files_preview.begin(), m_inject_files_preview.end());
+            m_inject_list_state = {};
+            anim::reset_stagger();
+            set_status("Found " + std::to_string(m_inject_files_preview.size()) + " files to inject");
+        }
+    }
+
+    ImGui::Spacing();
+
+    // --- Compression selector ---
+    ImGui::Text("Compression:");
+    ImGui::SameLine();
+    ImGui::RadioButton("Auto##inj", &m_inject_compression, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Raw##inj",  &m_inject_compression, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("LZMA##inj", &m_inject_compression, 2);
+    ImGui::SameLine();
+    ImGui::RadioButton("CRN##inj",  &m_inject_compression, 3);
+
+    ImGui::Spacing();
+
+    // --- Info text ---
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+        "Injects files into an existing game pack. Files with matching paths replace originals.");
+    ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
+        "Original .idx will be backed up to .idx.bak before modification.");
+
+    ImGui::Spacing();
+
+    // --- Inject / Cancel buttons ---
+    {
+        bool disabled = m_inject_idx_path.empty() || m_inject_source_dir.empty() || m_working;
+        if (disabled) ImGui::BeginDisabled();
+        if (ImGui::Button("Inject")) {
+            start_inject();
+        }
+        if (disabled) ImGui::EndDisabled();
+    }
+
+    if (m_working && m_active_tab == 2) {
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##inject")) {
+            m_cancel = true;
+        }
+    }
+
+    // --- Progress bar ---
+    if (m_working || m_progress > 0.0f) {
+        float smoothed = anim::lerp("inject_progress", m_progress);
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImVec2 avail  = ImGui::GetContentRegionAvail();
+        float bar_h   = 20.0f;
+        ImVec2 bar_min = cursor;
+        ImVec2 bar_max = ImVec2(cursor.x + avail.x, cursor.y + bar_h);
+        theme::render_glow_progress(bar_min, bar_max, smoothed);
+        ImGui::Dummy(ImVec2(avail.x, bar_h + 4.0f));
+
+        char pct_buf[16];
+        std::snprintf(pct_buf, sizeof(pct_buf), "%d%%", static_cast<int>(smoothed * 100.0f));
+        ImVec2 text_size = ImGui::CalcTextSize(pct_buf);
+        ImVec2 text_pos(
+            bar_min.x + (bar_max.x - bar_min.x - text_size.x) * 0.5f,
+            bar_min.y + (bar_h - text_size.y) * 0.5f
+        );
+        ImGui::GetWindowDrawList()->AddText(text_pos, IM_COL32(255, 255, 255, 220), pct_buf);
+    }
+
+    ImGui::Spacing();
+
+    // --- File preview list ---
+    if (!m_inject_files_preview.empty()) {
+        widgets::SimpleList("##inject_list", m_inject_files_preview, m_inject_list_state);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // render_index_tab()
 // ---------------------------------------------------------------------------
 
@@ -768,6 +910,51 @@ void App::start_pack() {
             set_status("Pack complete: " + out);
         } else {
             set_status("Pack error: " + writer.error());
+        }
+
+        m_progress = m_cancel ? 0.0f : 1.0f;
+        m_working  = false;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// start_inject()
+// ---------------------------------------------------------------------------
+
+void App::start_inject() {
+    if (m_worker.joinable())
+        m_worker.join();
+
+    m_working  = true;
+    m_cancel   = false;
+    m_progress = 0.0f;
+
+    std::string idx_path = m_inject_idx_path;
+    std::string src      = m_inject_source_dir;
+    int comp             = m_inject_compression;
+
+    m_worker = std::thread([this, idx_path, src, comp]() {
+        PackOptions opts;
+        switch (comp) {
+        case 0: opts.compression = PackCompression::Auto;    break;
+        case 1: opts.compression = PackCompression::Raw;     break;
+        case 2: opts.compression = PackCompression::Lzma;    break;
+        case 3: opts.compression = PackCompression::Crunch;  break;
+        default: opts.compression = PackCompression::Auto;   break;
+        }
+
+        IdxWriter writer;
+        bool ok = writer.inject(idx_path, src, opts, [this](int current, int total) -> bool {
+            m_progress = static_cast<float>(current) / static_cast<float>(total);
+            return !m_cancel.load();
+        });
+
+        if (m_cancel) {
+            set_status("Injection cancelled");
+        } else if (ok) {
+            set_status("Inject complete: " + idx_path);
+        } else {
+            set_status("Inject error: " + writer.error());
         }
 
         m_progress = m_cancel ? 0.0f : 1.0f;
