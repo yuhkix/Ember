@@ -4,9 +4,26 @@
 #include <vector>
 #include <functional>
 
-struct IdxHeader {
+static constexpr uint32_t IDX_MAGIC_NEW = 0x09785222; // New format magic
+
+// Old format header (24 bytes, no magic)
+struct IdxHeaderOld {
     uint32_t unknown[5];
     uint32_t file_count;
+};
+
+// New format header (24 bytes: magic + version + padding + count)
+struct IdxHeaderNew {
+    uint32_t magic;         // 0x09785222
+    char     version[16];   // e.g. "3.0.1625.eu\0"
+    uint32_t file_count;
+};
+
+// Unified header
+struct IdxHeader {
+    bool     is_new_format = false;
+    uint32_t file_count = 0;
+    char     version[16] = {};
 };
 
 struct IdxEntryFixed {

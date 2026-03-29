@@ -87,7 +87,7 @@ bool IdxWriter::pack(const std::string& source_dir,
     fs::path src_root = fs::canonical(source_dir);
 
     // ---- 2. Open first data file ----
-    uint8_t current_data_index = 1;
+    uint8_t current_data_index = 0; // .p000 to match game convention
     std::string data_path = make_data_path(base_dir, base_name, current_data_index);
     FILE* df = std::fopen(data_path.c_str(), "wb");
     if (!df) {
@@ -241,24 +241,30 @@ bool IdxWriter::pack(const std::string& source_dir,
 
     std::fclose(df);
 
-    // ---- 4. Write IDX file ----
+    // ---- 4. Write IDX file (new format with magic) ----
     FILE* idx = std::fopen(idx_output_path.c_str(), "wb");
     if (!idx) {
         m_error = "Cannot create IDX file: " + idx_output_path;
         return false;
     }
 
-    // 24-byte header
-    IdxHeader hdr{};
+    // New format header: magic(4) + version(16) + count(4) = 24 bytes
+    IdxHeaderNew hdr{};
+    hdr.magic = IDX_MAGIC_NEW;
+    std::strncpy(hdr.version, "1.0.0.ember", sizeof(hdr.version));
     hdr.file_count = static_cast<uint32_t>(records.size());
-    if (std::fwrite(&hdr, sizeof(IdxHeader), 1, idx) != 1) {
+    if (std::fwrite(&hdr, sizeof(IdxHeaderNew), 1, idx) != 1) {
         m_error = "Failed to write IDX header";
         std::fclose(idx);
         return false;
     }
 
-    // Per-entry: 33 bytes fixed (field by field) + null-terminated filename
-    for (const auto& rec : records) {
+    // Per-entry: 33 bytes fixed (field by field) + name_length bytes of filename
+    for (auto& rec : records) {
+        // field_8 = name length including null terminator
+        uint32_t name_len = static_cast<uint32_t>(rec.filename.size()) + 1;
+        rec.fixed.field_8 = name_len;
+
         if (!write_val(idx, rec.fixed.field_0) ||
             !write_val(idx, rec.fixed.field_1) ||
             !write_val(idx, rec.fixed.field_2) ||
@@ -273,9 +279,8 @@ bool IdxWriter::pack(const std::string& source_dir,
             return false;
         }
 
-        // Null-terminated filename
-        if (std::fwrite(rec.filename.c_str(), 1, rec.filename.size() + 1, idx) !=
-            rec.filename.size() + 1) {
+        // Filename (name_len bytes, null-terminated)
+        if (std::fwrite(rec.filename.c_str(), 1, name_len, idx) != name_len) {
             m_error = "Failed to write IDX entry filename";
             std::fclose(idx);
             return false;

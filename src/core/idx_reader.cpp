@@ -77,11 +77,33 @@ bool IdxReader::open(const std::string& idx_path) {
         m_base_dir += '/';
     m_base_name = p.stem().string();
 
-    // ---- Header (24 bytes) ----
-    if (std::fread(&m_header, sizeof(IdxHeader), 1, f) != 1) {
+    // ---- Detect format by reading first 4 bytes (magic check) ----
+    uint32_t magic = 0;
+    if (!read_val(f, magic)) {
         m_error = "Failed to read IDX header";
         std::fclose(f);
         return false;
+    }
+
+    if (magic == IDX_MAGIC_NEW) {
+        // New format: magic(4) + version(16) + count(4) = 24 bytes
+        m_header.is_new_format = true;
+        if (std::fread(m_header.version, 1, 16, f) != 16 ||
+            !read_val(f, m_header.file_count)) {
+            m_error = "Failed to read new-format IDX header";
+            std::fclose(f);
+            return false;
+        }
+    } else {
+        // Old format: first 4 bytes were unknown[0], read remaining 20 bytes
+        m_header.is_new_format = false;
+        uint32_t skip[4]; // unknown[1..4]
+        if (std::fread(skip, 4, 4, f) != 4 ||
+            !read_val(f, m_header.file_count)) {
+            m_error = "Failed to read old-format IDX header";
+            std::fclose(f);
+            return false;
+        }
     }
 
     m_entries.reserve(m_header.file_count);
@@ -104,24 +126,25 @@ bool IdxReader::open(const std::string& idx_path) {
             return false;
         }
 
-        // ---- Null-terminated filename ----
-        {
+        // ---- Filename ----
+        if (m_header.is_new_format && entry.fixed.field_8 > 0 && entry.fixed.field_8 <= 260) {
+            // New format: field_8 = name length (including null terminator)
+            std::vector<char> namebuf(entry.fixed.field_8);
+            if (std::fread(namebuf.data(), 1, entry.fixed.field_8, f) != entry.fixed.field_8) {
+                m_error = "Entry #" + std::to_string(i) + ": failed to read filename";
+                std::fclose(f);
+                return false;
+            }
+            entry.filename = std::string(namebuf.data()); // stops at first null
+        } else {
+            // Old format: null-terminated string, read byte by byte
             char ch;
             while (std::fread(&ch, 1, 1, f) == 1) {
                 if (ch == '\0') break;
                 entry.filename += ch;
-                // Safety: filenames shouldn't be longer than 260 chars
                 if (entry.filename.size() > 260) {
-                    m_error = "Entry #" + std::to_string(i) + ": filename too long (likely parsing error at offset " +
-                              std::to_string(ftell(f)) + ")";
-                    std::fclose(f);
-                    return false;
-                }
-            }
-            // Validate: filename should contain only printable ASCII
-            for (char c : entry.filename) {
-                if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E) {
-                    m_error = "Entry #" + std::to_string(i) + ": filename contains non-printable chars (likely format mismatch)";
+                    m_error = "Entry #" + std::to_string(i) + ": filename too long at offset " +
+                              std::to_string(ftell(f));
                     std::fclose(f);
                     return false;
                 }
