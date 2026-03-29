@@ -30,6 +30,17 @@ private:
     bool        m_idx_loaded = false;
     std::string m_unpack_output_dir;
 
+    // Extracted files list (populated live during extraction)
+    struct ExtractedFile {
+        std::string name;
+        std::string size_str;
+        std::string type_str;
+        bool        success;
+    };
+    std::mutex                  m_extracted_mutex;
+    std::vector<ExtractedFile>  m_extracted_files;
+    int                         m_extracted_stagger_base = 0; // for animation offset
+
     // Pack state
     std::string    m_pack_source_dir;
     std::string    m_pack_output_path;

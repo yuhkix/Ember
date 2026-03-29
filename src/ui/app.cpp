@@ -375,69 +375,67 @@ void App::render_unpack_tab() {
 
     ImGui::Spacing();
 
-    // --- File list table ---
-    if (m_idx_loaded) {
-        const auto& entries = m_reader.entries();
+    // --- Extracted files list (populated live during extraction) ---
+    {
+        std::lock_guard<std::mutex> lock(m_extracted_mutex);
+        int count = static_cast<int>(m_extracted_files.size());
+        if (count > 0) {
+            float row_height = ImGui::GetTextLineHeightWithSpacing();
+            float header_height = row_height + 4.0f;
+            float content_height = header_height + static_cast<float>(count) * row_height;
+            float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
+            float table_h = (content_height < avail_height) ? content_height : avail_height;
+            if (table_h < header_height + row_height) table_h = header_height + row_height;
 
-        // Calculate table height to fit content without empty rows
-        float row_height = ImGui::GetTextLineHeightWithSpacing();
-        float header_height = row_height + 4.0f;
-        float content_height = header_height + static_cast<float>(entries.size()) * row_height;
-        float avail_height = ImGui::GetContentRegionAvail().y - 8.0f;
-        float table_h = (content_height < avail_height) ? content_height : avail_height;
-        if (table_h < header_height + row_height) table_h = header_height + row_height;
+            ImGuiTableFlags tflags = ImGuiTableFlags_Borders    |
+                                     ImGuiTableFlags_RowBg      |
+                                     ImGuiTableFlags_Resizable  |
+                                     ImGuiTableFlags_ScrollY;
 
-        ImGuiTableFlags tflags = ImGuiTableFlags_Borders    |
-                                 ImGuiTableFlags_RowBg      |
-                                 ImGuiTableFlags_Resizable  |
-                                 ImGuiTableFlags_ScrollY;
+            if (ImGui::BeginTable("##FileList", 4, tflags, ImVec2(0, table_h))) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Name",   ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableHeadersRow();
 
-        if (ImGui::BeginTable("##FileList", 5, tflags, ImVec2(0, table_h))) {
-            ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Offset",     ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Size",       ImGuiTableColumnFlags_WidthFixed, 90.0f);
-            ImGui::TableSetupColumn("Compressed", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
-            ImGui::TableHeadersRow();
+                ImGuiListClipper clipper;
+                clipper.Begin(count);
+                while (clipper.Step()) {
+                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                        const auto& ef = m_extracted_files[row];
+                        int anim_idx = row - m_extracted_stagger_base;
+                        float row_alpha = anim::row_fade(anim_idx >= 0 ? anim_idx : 0);
+                        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
 
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(entries.size()));
-            while (clipper.Step()) {
-                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-                    const auto& e = entries[row];
-                    float row_alpha = anim::row_fade(row);
-                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * row_alpha);
+                        ImGui::TableNextRow();
 
-                    ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(ef.name.c_str());
 
-                    // Name
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(e.filename.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(ef.size_str.c_str());
 
-                    // Offset
-                    ImGui::TableSetColumnIndex(1);
-                    char off_buf[16];
-                    std::snprintf(off_buf, sizeof(off_buf), "%08X", e.fixed.data_offset);
-                    ImGui::TextUnformatted(off_buf);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(ef.type_str.c_str());
 
-                    // Size (total_size)
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(format_size(e.data_header.total_size).c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        if (ef.success)
+                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
+                        else
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERR");
 
-                    // Compressed size
-                    ImGui::TableSetColumnIndex(3);
-                    ImGui::TextUnformatted(format_size(e.data_header.compressed_size).c_str());
-
-                    // Type
-                    ImGui::TableSetColumnIndex(4);
-                    ImGui::TextUnformatted(compression_label(e.compression));
-
-                    ImGui::PopStyleVar();
+                        ImGui::PopStyleVar();
+                    }
                 }
-            }
 
-            ImGui::EndTable();
+                // Auto-scroll to bottom when extracting
+                if (m_working)
+                    ImGui::SetScrollHereY(1.0f);
+
+                ImGui::EndTable();
+            }
         }
     }
 }
@@ -626,18 +624,46 @@ void App::start_unpack() {
     m_cancel   = false;
     m_progress = 0.0f;
 
+    // Clear previous results and reset stagger
+    {
+        std::lock_guard<std::mutex> lock(m_extracted_mutex);
+        m_extracted_files.clear();
+        m_extracted_stagger_base = 0;
+    }
+    anim::reset_stagger();
+
     std::string out_dir = m_unpack_output_dir;
 
     m_worker = std::thread([this, out_dir]() {
-        int result = m_reader.extract_all(out_dir, [this](int current, int total) -> bool {
-            m_progress = static_cast<float>(current) / static_cast<float>(total);
-            return !m_cancel.load();
-        });
+        const auto& entries = m_reader.entries();
+        int total = static_cast<int>(entries.size());
+        int succeeded = 0;
+
+        for (int i = 0; i < total; ++i) {
+            if (m_cancel.load()) break;
+
+            const auto& entry = entries[i];
+            bool ok = m_reader.extract_entry(entry, out_dir);
+            if (ok) ++succeeded;
+
+            // Push to live list
+            {
+                std::lock_guard<std::mutex> lock(m_extracted_mutex);
+                ExtractedFile ef;
+                ef.name = entry.filename;
+                ef.size_str = format_size(entry.data_header.total_size);
+                ef.type_str = compression_label(entry.compression);
+                ef.success = ok;
+                m_extracted_files.push_back(std::move(ef));
+            }
+
+            m_progress = static_cast<float>(i + 1) / static_cast<float>(total);
+        }
 
         if (m_cancel) {
             set_status("Extraction cancelled");
         } else {
-            set_status("Extracted " + std::to_string(result) + " files");
+            set_status("Extracted " + std::to_string(succeeded) + " / " + std::to_string(total) + " files");
         }
 
         m_progress = m_cancel ? 0.0f : 1.0f;
